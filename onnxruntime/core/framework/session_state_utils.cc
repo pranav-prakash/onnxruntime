@@ -149,7 +149,8 @@ common::Status SaveInitializedTensors(
   auto initialized_tensors_to_allocate = id_to_initialized_tensor;
   for (int ort_value_index : initializer_allocation_order) {
     const auto entry = initialized_tensors_to_allocate.find(ort_value_index);
-    ORT_ENFORCE(entry != initialized_tensors_to_allocate.end());
+    ORT_ENFORCE(entry != initialized_tensors_to_allocate.end() 
+        && entry->second->data_type() != ONNX_NAMESPACE::TensorProto_DataType::TensorProto_DataType_STRING);
     ORT_RETURN_IF_ERROR(planner.Trace(entry->first, entry->second));
     initialized_tensors_to_allocate.erase(entry);
   }
@@ -157,6 +158,10 @@ common::Status SaveInitializedTensors(
   for (const auto& entry : initialized_tensors_to_allocate) {
     // We don't want to trace shared initializers since their memory is provided by the user
     if (user_supplied_initializer_ids.find(entry.first) != user_supplied_initializer_ids.end()) {
+      continue;
+    }
+    if (entry.second->data_type() == ONNX_NAMESPACE::TensorProto_DataType::TensorProto_DataType_STRING) {
+      // do not trace string tensors
       continue;
     }
     ORT_RETURN_IF_ERROR(planner.Trace(entry.first, entry.second));

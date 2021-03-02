@@ -86,6 +86,11 @@ class TensorAllocatorWithMemPattern : public ITensorAllocator {
     // fall back to allocate separate buffer.
     // if it->second.get() is null, then fall back to the block not found case
     auto block = pattern->GetBlock(ort_value_index);
+    if (nullptr == block) {
+      // not traced
+      out = onnxruntime::make_unique<MemBuffer>(GetAllocator(location));
+      return Status::OK();
+    }
     auto it = buffers_.find(location);
     if (it == buffers_.end()) {
       if (block != nullptr && block->size_ == 0) {

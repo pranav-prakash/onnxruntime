@@ -542,12 +542,6 @@ ORT_API(void, OrtUninitializeBuffer, _In_opt_ void* input, size_t input_len, enu
   }
 }
 
-static void UnInitTensor(void* param) noexcept {
-  UnInitializeParam* p = reinterpret_cast<UnInitializeParam*>(param);
-  OrtUninitializeBuffer(p->preallocated, p->preallocated_size, p->ele_type);
-  delete p;
-}
-
 class AutoDelete {
  public:
   OrtCallback d{nullptr, nullptr};
@@ -617,7 +611,6 @@ static void MoveOrtCallback(OrtCallback& from, OrtCallback& to) {
 Status TensorProtoToMLValue(const Env& env, const ORTCHAR_T* model_path,
                             const ONNX_NAMESPACE::TensorProto& tensor_proto, const MemBuffer& m, OrtValue& value,
                             OrtCallback& deleter) {
-  const OrtMemoryInfo& allocator = m.GetAllocInfo();
   ONNXTensorElementDataType ele_type = utils::GetTensorElementType(tensor_proto);
   deleter.f = nullptr;
   deleter.param = nullptr;
@@ -625,7 +618,9 @@ Status TensorProtoToMLValue(const Env& env, const ORTCHAR_T* model_path,
   SafeInt<size_t> raw_data_len = 0;
   const DataTypeImpl* const type = DataTypeImpl::TensorTypeFromONNXEnum(tensor_proto.data_type())->GetElementType();
   AutoDelete deleter_for_file_data;
-  void* tensor_data;
+  std::unique_ptr<Tensor> tensor_ptr;
+  // Note: We permit an empty tensor_shape_vec, and treat it as a scalar (a tensor of size 1).
+  TensorShape tensor_shape{GetTensorShapeFromTensorProto(tensor_proto)};
   {
     if (utils::HasExternalData(tensor_proto)) {
       // Get the external data info
@@ -656,12 +651,25 @@ Status TensorProtoToMLValue(const Env& env, const ORTCHAR_T* model_path,
       //raw_data = buffer.release();
       raw_data_len = tensor_proto.raw_data().size();
     }
-    if (endian::native == endian::little && raw_data != nullptr && deleter_for_file_data.d.f != nullptr) {
-      tensor_data = raw_data;
+
+    if (endian::native == endian::little && raw_data != nullptr 
+        && m.GetBuffer() == nullptr && deleter_for_file_data.d.f != nullptr) {
+      // TODO!! what if this is a string tensor, loaded from an external data? are we skipping string init here?
+      tensor_ptr = onnxruntime::make_unique<Tensor>(type, tensor_shape, raw_data, m.GetAllocInfo());
       MoveOrtCallback(deleter_for_file_data.d, deleter);
     } else {
-      void* preallocated = m.GetBuffer();
+      const AllocatorPtr& alloc = m.GetAllocator();
       size_t preallocated_size = m.GetLen();
+      if (alloc) {
+        // no preallocated mem buffer
+        tensor_ptr = onnxruntime::make_unique<Tensor>(type, tensor_shape, alloc);
+        preallocated_size = tensor_ptr->SizeInBytes();
+      } else {
+        tensor_ptr = onnxruntime::make_unique<Tensor>(type, tensor_shape, m.GetBuffer(), m.GetAllocInfo());      
+      }
+      // set preallocated pointer and size
+      void* preallocated = tensor_ptr->MutableDataRaw();
+
       int64_t tensor_size = 1;
       {
         for (auto i : tensor_proto.dims()) {
@@ -699,16 +707,6 @@ Status TensorProtoToMLValue(const Env& env, const ORTCHAR_T* model_path,
         CASE_PROTO(FLOAT16, MLFloat16);
         CASE_PROTO(BFLOAT16, BFloat16);
         case ONNX_NAMESPACE::TensorProto_DataType::TensorProto_DataType_STRING:
-          if (preallocated != nullptr) {
-            OrtStatus* status = OrtInitializeBufferForTensor(preallocated, preallocated_size, ele_type);
-            if (status != nullptr) {
-              OrtApis::ReleaseStatus(status);
-              return Status(common::ONNXRUNTIME, common::FAIL, "initialize preallocated buffer failed");
-            }
-
-            deleter.f = UnInitTensor;
-            deleter.param = new UnInitializeParam{preallocated, preallocated_size, ele_type};
-          }
           ORT_RETURN_IF_ERROR(UnpackTensor<std::string>(tensor_proto, raw_data, raw_data_len,
                                                         static_cast<std::string*>(preallocated),
                                                         static_cast<size_t>(tensor_size)));
@@ -719,16 +717,11 @@ Status TensorProtoToMLValue(const Env& env, const ORTCHAR_T* model_path,
           return common::Status(common::ONNXRUNTIME, common::INVALID_ARGUMENT, ostr.str());
         }
       }
-      tensor_data = preallocated;
     }
   }
-  std::vector<int64_t> tensor_shape_vec = GetTensorShapeFromTensorProto(tensor_proto);
-  // Note: We permit an empty tensor_shape_vec, and treat it as a scalar (a tensor of size 1).
-  TensorShape tensor_shape{tensor_shape_vec};
 
   auto ml_tensor = DataTypeImpl::GetType<Tensor>();
-  value.Init(new Tensor(type, tensor_shape, tensor_data, allocator), ml_tensor,
-             ml_tensor->GetDeleteFunc());
+  value.Init(tensor_ptr.release(), ml_tensor, ml_tensor->GetDeleteFunc());
   return Status::OK();
 }
 #ifdef _MSC_VER
