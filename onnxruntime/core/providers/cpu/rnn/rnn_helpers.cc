@@ -286,7 +286,6 @@ void ComputeGemm(const int M,
       C, ldc, scale_multiplier.data(), nullptr,
       beta == 1.0f ? MLAS_QGEMM_OUTPUT_MODE::AccumulateMode : MLAS_QGEMM_OUTPUT_MODE::ZeroMode,
       scale_multiplier.size() == 1 ? MLAS_QUANTIZATION_GRANULARITY::PerMatrix : MLAS_QUANTIZATION_GRANULARITY::PerColumn);
-#ifdef MLAS_SUPPORTS_PACKED_GEMM_U8X8
   if (weights.is_prepacked_) {
     MlasGemm(static_cast<size_t>(M),
              static_cast<size_t>(N),
@@ -301,24 +300,22 @@ void ComputeGemm(const int M,
              ld_C_buffer,
              thread_pool,
              &output_processor);
-    return;
+  } else {
+    MlasGemm(static_cast<size_t>(M),
+             static_cast<size_t>(N),
+             static_cast<size_t>(K),
+             a_data_quant,
+             static_cast<size_t>(K),
+             a_zero_point,
+             static_cast<const uint8_t*>(weights.buffer_),
+             static_cast<size_t>(N),
+             b_zero_point,
+             b_is_signed,
+             C_buffer,
+             ld_C_buffer,
+             thread_pool,
+             &output_processor);
   }
-#endif
-
-  MlasGemm(static_cast<size_t>(M),
-           static_cast<size_t>(N),
-           static_cast<size_t>(K),
-           a_data_quant,
-           static_cast<size_t>(K),
-           a_zero_point,
-           static_cast<const uint8_t*>(weights.buffer_),
-           static_cast<size_t>(N),
-           b_zero_point,
-           b_is_signed,
-           C_buffer,
-           ld_C_buffer,
-           thread_pool,
-           &output_processor);
 }
 
 namespace deepcpu {

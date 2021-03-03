@@ -22,10 +22,7 @@ class QAttention : public OpKernel, public AttentionCPUBase {
   QAttention(const OpKernelInfo& info);
 
   Status Compute(OpKernelContext* context) const override;
-
-#ifdef MLAS_SUPPORTS_PACKED_GEMM_U8X8
   Status PrePack(const Tensor& tensor, int input_idx, bool& is_packed) override;
-#endif
 
  private:
   BufferUniquePtr packed_weights_;
@@ -51,7 +48,6 @@ ONNX_OPERATOR_TYPED_KERNEL_EX(
 template <typename T>
 QAttention<T>::QAttention(const OpKernelInfo& info) : OpKernel(info), AttentionCPUBase(info) {}
 
-#ifdef MLAS_SUPPORTS_PACKED_GEMM_U8X8
 template <typename T>
 Status QAttention<T>::PrePack(const Tensor& weights, int input_idx, bool& is_packed) {
   is_packed = false;
@@ -98,7 +94,6 @@ Status QAttention<T>::PrePack(const Tensor& weights, int input_idx, bool& is_pac
   is_packed = true;
   return Status::OK();
 }
-#endif
 
 template <typename T>
 Status QAttention<T>::Compute(OpKernelContext* context) const {
@@ -217,11 +212,9 @@ Status QAttention<T>::Compute(OpKernelContext* context) const {
                                                                     head_size,
                                                                     &dequant_scale,
                                                                     bias_data + weights_offset);
-#ifdef MLAS_SUPPORTS_PACKED_GEMM_U8X8
         if (packed_weights_) {
           const auto* packed_weight =
               static_cast<const uint8_t*>(packed_weights_.get()) + packed_weights_size_ * (weights_offset / head_size);
-
           MlasGemm(
               sequence_length,                                    // M      = S
               head_size,                                          // N      = H
@@ -236,25 +229,23 @@ Status QAttention<T>::Compute(OpKernelContext* context) const {
               head_size,                                          // ldc
               nullptr,                                            // use single-thread
               &scale_bias_processor);                             // output processor
-
-          continue;
+        } else {
+          MlasGemm(
+              sequence_length,                                    // M      = S
+              head_size,                                          // N      = H
+              input_hidden_size,                                  // K      = D
+              input_data + input_offset,                          // A
+              input_hidden_size,                                  // lda    = D
+              input_zero_point,                                   // input zero point
+              weights_data + weights_offset,                      // B
+              3 * hidden_size,                                    // ldb    = 3NH
+              weight_zero_point,                                  // weight zero point
+              weights_is_signed,                                  // weight data type
+              reinterpret_cast<int32_t*>(qkv_dest + qkv_offset),  // C
+              head_size,                                          // ldc
+              nullptr,                                            // use single-thread
+              &scale_bias_processor);                             // post processor
         }
-#endif
-        MlasGemm(
-            sequence_length,                                      // M      = S
-            head_size,                                            // N      = H
-            input_hidden_size,                                    // K      = D
-            input_data + input_offset,                            // A
-            input_hidden_size,                                    // lda    = D
-            input_zero_point,                                     // input zero point
-            weights_data + weights_offset,                        // B
-            3 * hidden_size,                                      // ldb    = 3NH
-            weight_zero_point,                                    // weight zero point
-            weights_is_signed,                                    // weight data type
-            reinterpret_cast<int32_t*>(qkv_dest + qkv_offset),    // C
-            head_size,                                            // ldc
-            nullptr,                                              // use single-thread
-            &scale_bias_processor);                               // post processor
       }
     });
   }

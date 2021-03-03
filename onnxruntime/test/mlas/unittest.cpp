@@ -590,8 +590,6 @@ protected:
     }
 };
 
-#ifdef MLAS_SUPPORTS_PACKED_GEMM_U8X8
-
 template<>
 class MlasQgemmU8X8U8X8TestBase<true> : public MlasTestBase
 {
@@ -663,8 +661,6 @@ protected:
 private:
     MatrixGuardBuffer<uint8_t> BufferBPacked;
 };
-
-#endif
 
 template<typename xint8_t, typename OutputType, bool Packed>
 class MlasQgemmU8X8Test;
@@ -3130,7 +3126,6 @@ RunThreadedTests(
     printf("QGEMM U8U8=float tests.\n");
     onnxruntime::make_unique<MlasQgemmU8X8Test<uint8_t, float, false>>()->ExecuteShort();
 
-#ifdef MLAS_SUPPORTS_PACKED_GEMM_U8X8
     if (MlasGemmPackBSize(128, 128, true) > 0) {
         printf("QGEMM U8S8=int32_t packed tests.\n");
         onnxruntime::make_unique<MlasQgemmU8X8Test<int8_t, int32_t, true>>()->ExecuteShort();
@@ -3143,7 +3138,6 @@ RunThreadedTests(
         printf("QGEMM U8U8=float packed tests.\n");
         onnxruntime::make_unique<MlasQgemmU8X8Test<uint8_t, float, true>>()->ExecuteShort();
     }
-#endif
 
     printf("Conv2D tests.\n");
     onnxruntime::make_unique<MlasConv2DTest>()->ExecuteShort();

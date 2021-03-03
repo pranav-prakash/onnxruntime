@@ -61,7 +61,6 @@ Status MatMulInteger::Compute(OpKernelContext* ctx) const {
   const auto* a_data = a->template Data<uint8_t>();
   auto* y_data = y->template MutableData<int32_t>();
 
-#ifdef MLAS_SUPPORTS_PACKED_GEMM_U8X8
   if (packed_b_) {
     for (size_t i = 0; i < helper.OutputOffsets().size(); i++) {
       MlasGemm(static_cast<size_t>(helper.M()),
@@ -77,14 +76,9 @@ Status MatMulInteger::Compute(OpKernelContext* ctx) const {
                static_cast<size_t>(helper.N()),
                thread_pool);
     }
-    return Status::OK();
-  }
-#endif
-
-  if (b != nullptr) {
+  } else if (b != nullptr) {
     for (size_t i = 0; i < helper.OutputOffsets().size(); i++) {
       const auto* b_data = static_cast<const uint8_t*>(b->DataRaw());
-      const bool b_is_signed = b->IsDataType<int8_t>();
       MlasGemm(static_cast<size_t>(helper.M()),
                static_cast<size_t>(helper.N()),
                static_cast<size_t>(helper.K()),
@@ -94,7 +88,7 @@ Status MatMulInteger::Compute(OpKernelContext* ctx) const {
                b_data + helper.RightOffsets()[i],
                static_cast<size_t>(helper.N()),
                b_offset,
-               b_is_signed,
+               b->IsDataType<int8_t>(),
                y_data + helper.OutputOffsets()[i],
                static_cast<size_t>(helper.N()),
                thread_pool);
