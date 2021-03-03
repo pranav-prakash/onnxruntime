@@ -22,7 +22,7 @@ Abstract:
 #include <asm/hwcap.h>
 // N.B. Support building with older versions of asm/hwcap.h that do not define
 // this capability bit.
-#ifndef HWCAP_ASIMDIP
+#ifndef HWCAP_ASIMDDP
 #define HWCAP_ASIMDDP (1 << 20)
 #endif
 #endif
