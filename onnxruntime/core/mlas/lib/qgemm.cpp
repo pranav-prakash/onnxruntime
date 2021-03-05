@@ -17,15 +17,23 @@ Abstract:
 
 #include "mlasi.h"
 
-//#define PER_COLUMN
-
 //
-//
+// Quantized integer matrix/matrix dispatch structure.
 //
 
 typedef
 void
-(MLASCALL MLAS_GEMM_U8X8_COPY_PACKB_ROUTINE)(
+(MLAS_GEMM_U8X8_OPERATION)(
+    const MLAS_GEMM_U8X8_PARAMETERS* Parameters,
+    const size_t RangeStartM,
+    const size_t RangeCountM,
+    const size_t RangeStartN,
+    const size_t RangeCountN
+    );
+
+typedef
+void
+(MLAS_GEMM_U8X8_COPY_PACKB_ROUTINE)(
     uint8_t* D,
     const uint8_t* B,
     size_t ldb,
@@ -79,25 +87,7 @@ MlasGemmU8X8GetDispatch(
 struct MLAS_GEMM_U8X8_WORK_BLOCK {
     int32_t ThreadCountM;
     int32_t ThreadCountN;
-    size_t RangeStartM;
-    size_t RangeStartN;
-    size_t RangeCountM;
-    size_t RangeCountN;
-    size_t M;
-    size_t N;
-    size_t K;
-    const uint8_t* A;
-    size_t lda;
-    const void* B;
-    size_t ldb;
-    const uint8_t* ZeroPointB;
-    int32_t* C;
-    size_t ldc;
-    uint8_t ZeroPointA;
-    bool BIsPacked;
-    bool BIsSigned;
-    bool PerColumnZeroPoints;
-    const MLAS_QGEMM_OUTPUT_PROCESSOR* OutputProcessor;
+    const MLAS_GEMM_U8X8_PARAMETERS* Parameters;
 };
 
 //
@@ -169,7 +159,7 @@ MlasGemmU8X8FixupZeroPointB(
 template<typename KernelType>
 MLAS_FORCEINLINE
 void
-MlasGemmU8X8ExpandZeroPointB(
+MlasGemmU8X8FixupZeroPointB(
     const uint8_t* PackedZeroPointB,
     int32_t* ZeroPointBBuffer,
     size_t N,
@@ -186,7 +176,12 @@ MlasGemmU8X8ExpandZeroPointB(
         ZeroPointBBuffer[n] = -ZeroPointB;
     }
 
-    size_t AlignedN = (N + 15) & ~15;
+    //
+    // Fill the misaligned slots of the zero point buffer with zeroes to guard
+    // against tools that check for uninitialized data usage.
+    //
+
+    size_t AlignedN = (N + MLAS_QGEMM_STRIDEN_THREAD_ALIGN - 1) & ~(MLAS_QGEMM_STRIDEN_THREAD_ALIGN - 1);
 
     for (size_t n = N; n < AlignedN; n++) {
         ZeroPointBBuffer[n] = 0;
@@ -234,9 +229,12 @@ MlasGemmU8X8Kernel(
 
 template<typename KernelType>
 void
-MLASCALL
 MlasGemmU8X8Operation(
-    const MLAS_GEMM_U8X8_WORK_BLOCK* WorkBlock
+    const MLAS_GEMM_U8X8_PARAMETERS* Parameters,
+    const size_t RangeStartM,
+    const size_t RangeCountM,
+    const size_t RangeStartN,
+    const size_t RangeCountN
     )
 /*++
 
@@ -247,7 +245,15 @@ Routine Description:
 
 Arguments:
 
-    WorkBlock - Supplies the structure containing the GEMM parameters.
+    Parameters - Supplies the structure containing the GEMM parameters.
+
+    RangeStartM - Supplies the starting row index to output.
+
+    RangeCountM - Supplies the number of rows to output.
+
+    RangeStartN - Supplies the starting column index to output.
+
+    RangeCountM - Supplies the number of columns to output.
 
 Return Value:
 
@@ -264,41 +270,40 @@ Return Value:
     MLAS_DECLSPEC_ALIGN(int32_t ColumnSumBuffer[Strides.N], 64);
     MLAS_DECLSPEC_ALIGN(int32_t ZeroPointBBuffer[Strides.N], 64);
 
-    const size_t M = WorkBlock->RangeCountM;
-    const size_t N = WorkBlock->RangeCountN;
-    const size_t K = WorkBlock->K;
+    const size_t K = Parameters->K;
 
-    const size_t lda = WorkBlock->lda;
-    const size_t ldb = WorkBlock->ldb;
-    const size_t ldc = WorkBlock->ldc;
+    const size_t lda = Parameters->lda;
+    const size_t ldb = Parameters->ldb;
+    const size_t ldc = Parameters->ldc;
 
-    const uint8_t* A = WorkBlock->A + WorkBlock->RangeStartM * lda;
-    const uint8_t* B = (const uint8_t*)WorkBlock->B + WorkBlock->RangeStartN;
-    int32_t* C = WorkBlock->C + WorkBlock->RangeStartM * ldc + WorkBlock->RangeStartN;
-    const uint8_t* PackedZeroPointB = WorkBlock->PerColumnZeroPoints ?
-        WorkBlock->ZeroPointB + WorkBlock->RangeStartN : nullptr;
+    const uint8_t* A = Parameters->A + RangeStartM * lda;
+    const uint8_t* B = (const uint8_t*)Parameters->B + RangeStartN;
+    int32_t* C = Parameters->C + RangeStartM * ldc + RangeStartN;
+    const uint8_t* PackedZeroPointB = Parameters->PerColumnZeroPoints ?
+        Parameters->ZeroPointB + RangeStartN : nullptr;
 
-    int32_t ZeroPointA = WorkBlock->ZeroPointA;
-    int32_t ZeroPointB = typename KernelType::OffsetBType(*WorkBlock->ZeroPointB);
+    int32_t ZeroPointA = Parameters->ZeroPointA;
+    int32_t ZeroPointB = typename KernelType::OffsetBType(*Parameters->ZeroPointB);
 
     //
     // Try to use a GEMV kernel if supported by this kernel type.
     //
 
-    if ((M == 1) &&
+    if ((RangeCountM == 1) &&
         (ZeroPointA == 0) && (PackedZeroPointB == nullptr) && (ZeroPointB == 0) &&
-        (WorkBlock->OutputProcessor == nullptr)) {
-        if (MlasGemmU8X8TryGemvKernel<KernelType>(A, B, ldb, C, K, N, WorkBlock->BIsSigned)) {
+        (Parameters->OutputProcessor == nullptr)) {
+        if (MlasGemmU8X8TryGemvKernel<KernelType>(A, B, ldb, C, K, RangeCountN, Parameters->BIsSigned)) {
             return;
         }
     }
 
     //
-    // Fixup the sign bit of the zero point offset of matrix B if the data is
-    // the opposite format of the kernel implementation.
+    // Fixup the sign bit of the per-matrix zero point offset of matrix B if the
+    // data is the opposite format of the kernel implementation. This value is
+    // ignored if per-column zero point offsets are used instead.
     //
 
-    ZeroPointB = MlasGemmU8X8FixupZeroPointB<KernelType>(ZeroPointB, WorkBlock->BIsSigned);
+    ZeroPointB = MlasGemmU8X8FixupZeroPointB<KernelType>(ZeroPointB, Parameters->BIsSigned);
 
     //
     // Step through each slice of matrix B along the K dimension.
@@ -318,20 +323,21 @@ Return Value:
 
         size_t CountN;
 
-        for (size_t n = 0; n < N; n += CountN) {
+        for (size_t n = 0; n < RangeCountN; n += CountN) {
 
-            CountN = std::min(N - n, Strides.N);
+            CountN = std::min(RangeCountN - n, Strides.N);
 
             //
-            //
+            // Fixup the sign bit of the per-column zero point offsets of matrix B
+            // if the data is the opposite format of the kernel implementation.
             //
 
             if (PackedZeroPointB != nullptr) {
-                MlasGemmU8X8ExpandZeroPointB<KernelType>(
+                MlasGemmU8X8FixupZeroPointB<KernelType>(
                     PackedZeroPointB + n,
                     ZeroPointBBuffer,
                     CountN,
-                    WorkBlock->BIsSigned);
+                    Parameters->BIsSigned);
             }
 
             //
@@ -345,7 +351,7 @@ Return Value:
                 CountN,
                 CountK,
                 ColumnSumBuffer,
-                WorkBlock->BIsSigned);
+                Parameters->BIsSigned);
 
             MlasGemmU8X8ScaleSumBuffer(ColumnSumBuffer, CountN, -ZeroPointA);
 
@@ -356,9 +362,9 @@ Return Value:
             int32_t* c = C + n;
             size_t CountM;
 
-            for (size_t m = 0; m < M; m += CountM) {
+            for (size_t m = 0; m < RangeCountM; m += CountM) {
 
-                CountM = std::min(M - m, Strides.M);
+                CountM = std::min(RangeCountM - m, Strides.M);
 
                 //
                 // Copy a panel of matrix A to a local packed buffer.
@@ -372,9 +378,24 @@ Return Value:
                     CountK,
                     RowSumBuffer);
 
+                //
+                // Apply the global depth value constant without the ZeroPointB scaling from:
+                //
+                //     (A[i] - ZeroPointA) * (B[i] - ZeroPointB)
+                //              ==>
+                //     A[i] * B[i] - A[i] * ZeroPointB - B[i] * ZeroPointA + ZeroPointA * ZeroPointB
+                //
+                // The ZeroPointB term is factored out and either applied below for per-matrix
+                // quantization or inside the kernel for per-column quantization.
+                //
+
                 for (size_t mm = 0; mm < CountM; mm++) {
                     RowSumBuffer[mm] -= int32_t(CountK) * ZeroPointA;
                 }
+
+                //
+                // Scale the row sums by the per-matrix zero point offset of matrix B.
+                //
 
                 if (PackedZeroPointB == nullptr) {
                     MlasGemmU8X8ScaleSumBuffer(RowSumBuffer, CountM, -ZeroPointB);
@@ -406,13 +427,13 @@ Return Value:
                         (PackedZeroPointB != nullptr) ? ZeroPointBBuffer : nullptr,
                         ZeroMode);
 
-                    if (PostProcess && WorkBlock->OutputProcessor != nullptr) {
-                        WorkBlock->OutputProcessor->Process(WorkBlock->C,
-                                                            WorkBlock->RangeStartM + m + CountM - RowsRemaining,
-                                                            WorkBlock->RangeStartN + n,
+                    if (PostProcess && Parameters->OutputProcessor != nullptr) {
+                        Parameters->OutputProcessor->Process(Parameters->C,
+                                                            RangeStartM + m + CountM - RowsRemaining,
+                                                            RangeStartN + n,
                                                             RowsHandled,
                                                             CountN,
-                                                            WorkBlock->ldc);
+                                                            Parameters->ldc);
                     }
 
                     c += ldc * RowsHandled;
@@ -430,9 +451,12 @@ Return Value:
 
 template<typename KernelType>
 void
-MLASCALL
 MlasGemmU8X8PackedOperation(
-    const MLAS_GEMM_U8X8_WORK_BLOCK* WorkBlock
+    const MLAS_GEMM_U8X8_PARAMETERS* Parameters,
+    const size_t RangeStartM,
+    const size_t RangeCountM,
+    const size_t RangeStartN,
+    const size_t RangeCountN
     )
 /*++
 
@@ -443,7 +467,15 @@ Routine Description:
 
 Arguments:
 
-    WorkBlock - Supplies the structure containing the GEMM parameters.
+    Parameters - Supplies the structure containing the GEMM parameters.
+
+    RangeStartM - Supplies the starting row index to output.
+
+    RangeCountM - Supplies the number of rows to output.
+
+    RangeStartN - Supplies the starting column index to output.
+
+    RangeCountM - Supplies the number of columns to output.
 
 Return Value:
 
@@ -459,41 +491,37 @@ Return Value:
     MLAS_DECLSPEC_ALIGN(int32_t ColumnSumBuffer[Strides.N], 64);
     MLAS_DECLSPEC_ALIGN(int32_t ZeroPointBBuffer[Strides.N], 64);
 
-    const size_t M = WorkBlock->RangeCountM;
-    const size_t N = WorkBlock->RangeCountN;
-    const size_t K = WorkBlock->K;
+    const size_t K = Parameters->K;
 
-    const size_t lda = WorkBlock->lda;
-    const size_t ldc = WorkBlock->ldc;
+    const size_t lda = Parameters->lda;
+    const size_t ldc = Parameters->ldc;
 
-    const uint8_t* A = WorkBlock->A + WorkBlock->RangeStartM * lda;
-    const uint8_t* PackedB = (const uint8_t*)WorkBlock->B;
-    int32_t* C = WorkBlock->C + WorkBlock->RangeStartM * ldc + WorkBlock->RangeStartN;
+    const uint8_t* A = Parameters->A + RangeStartM * lda;
+    const uint8_t* PackedB = (const uint8_t*)Parameters->B;
+    int32_t* C = Parameters->C + RangeStartM * ldc + RangeStartN;
+    const uint8_t* PackedZeroPointB = Parameters->PerColumnZeroPoints ?
+        Parameters->ZeroPointB + RangeStartN : nullptr;
 
-    const bool PerColumnZeroPoints = WorkBlock->PerColumnZeroPoints;
-
-    int32_t ZeroPointA = WorkBlock->ZeroPointA;
-    int32_t ZeroPointB = typename KernelType::OffsetBType(*WorkBlock->ZeroPointB);
+    int32_t ZeroPointA = Parameters->ZeroPointA;
+    int32_t ZeroPointB = typename KernelType::OffsetBType(*Parameters->ZeroPointB);
 
     //
-    // Flip the sign bit of the zero point offset of matrix B if the data is
-    // the opposite format of the kernel implementation.
+    // Fixup the sign bit of the per-matrix zero point offset of matrix B if the
+    // data is the opposite format of the kernel implementation. This value is
+    // ignored if per-column zero point offsets are used instead.
     //
 
-    ZeroPointB = MlasGemmU8X8FixupZeroPointB<KernelType>(ZeroPointB, WorkBlock->BIsSigned);
-
-    int32_t offb32[Strides.N];
-    std::fill_n(offb32, Strides.N, ZeroPointB);
+    ZeroPointB = MlasGemmU8X8FixupZeroPointB<KernelType>(ZeroPointB, Parameters->BIsSigned);
 
     //
     // Extract the pointer to the column sum buffer from the packed matrix.
     //
 
     const size_t AlignedN =
-        (WorkBlock->N + MLAS_QGEMM_STRIDEN_THREAD_ALIGN - 1) & ~(MLAS_QGEMM_STRIDEN_THREAD_ALIGN - 1);
+        (Parameters->N + MLAS_QGEMM_STRIDEN_THREAD_ALIGN - 1) & ~(MLAS_QGEMM_STRIDEN_THREAD_ALIGN - 1);
     const int32_t* PackedColumnSumBuffer = (const int32_t*)PackedB;
     PackedB = (const uint8_t*)(PackedColumnSumBuffer + AlignedN);
-    PackedColumnSumBuffer += WorkBlock->RangeStartN;
+    PackedColumnSumBuffer += RangeStartN;
 
     //
     // Step through each slice of matrix B along the K dimension.
@@ -517,56 +545,40 @@ Return Value:
 
         size_t CountN;
 
-        for (size_t n = 0; n < N; n += CountN) {
+        for (size_t n = 0; n < RangeCountN; n += CountN) {
 
-            CountN = std::min(N - n, Strides.N);
+            CountN = std::min(RangeCountN - n, Strides.N);
 
             if (k == 0) {
                 MlasGemmU8X8ScaleSumBuffer(ColumnSumBuffer, PackedColumnSumBuffer + n,
                     CountN, -ZeroPointA);
-            } else {
-                std::fill_n(ColumnSumBuffer, Strides.N, 0);
             }
 
             //
-            // Apply the depth value constant to the column sum buffer.
+            // Fixup the sign bit of the per-column zero point offsets of matrix B
+            // if the data is the opposite format of the kernel implementation.
             //
 
-            int32_t CountKTimesZeroPointA = int32_t(CountK) * ZeroPointA;
-
-            if (PerColumnZeroPoints) {
-
-                for (size_t nn = 0; nn < CountN; nn++) {
-
-                    int32_t ColumnZeroPointB;
-
-                    ColumnZeroPointB = typename KernelType::OffsetBType(WorkBlock->ZeroPointB[WorkBlock->RangeStartN + n + nn]);
-                    ColumnZeroPointB = MlasGemmU8X8FixupZeroPointB<KernelType>(ColumnZeroPointB, WorkBlock->BIsSigned);
-
-                    ZeroPointBBuffer[nn] = ColumnZeroPointB;
-
-                    ColumnSumBuffer[nn] += CountKTimesZeroPointA * ColumnZeroPointB;
-                }
-
-            } else {
-
-                for (size_t nn = 0; nn < CountN; nn++) {
-                    ColumnSumBuffer[nn] += CountKTimesZeroPointA * ZeroPointB;
-                }
+            if (PackedZeroPointB != nullptr) {
+                MlasGemmU8X8FixupZeroPointB<KernelType>(
+                    PackedZeroPointB + n,
+                    ZeroPointBBuffer,
+                    CountN,
+                    Parameters->BIsSigned);
             }
 
             //
             // Step through each slice of matrix A along the M dimension.
             //
 
-            const uint8_t* b = PackedB + (WorkBlock->RangeStartN + n) *
+            const uint8_t* b = PackedB + (RangeStartN + n) *
                 KernelType::PackedK * PackedCountK;
             int32_t* c = C + n;
             size_t CountM;
 
-            for (size_t m = 0; m < M; m += CountM) {
+            for (size_t m = 0; m < RangeCountM; m += CountM) {
 
-                CountM = std::min(M - m, Strides.M);
+                CountM = std::min(RangeCountM - m, Strides.M);
 
                 //
                 // Copy a panel of matrix A to a local packed buffer.
@@ -580,9 +592,26 @@ Return Value:
                     CountK,
                     RowSumBuffer);
 
-                if (PerColumnZeroPoints) {
-                    MlasGemmU8X8ScaleSumBuffer(RowSumBuffer, CountM, -1);
-                } else {
+                //
+                // Apply the global depth value constant without the ZeroPointB scaling from:
+                //
+                //     (A[i] - ZeroPointA) * (B[i] - ZeroPointB)
+                //              ==>
+                //     A[i] * B[i] - A[i] * ZeroPointB - B[i] * ZeroPointA + ZeroPointA * ZeroPointB
+                //
+                // The ZeroPointB term is factored out and either applied below for per-matrix
+                // quantization or inside the kernel for per-column quantization.
+                //
+
+                for (size_t mm = 0; mm < CountM; mm++) {
+                    RowSumBuffer[mm] -= int32_t(CountK) * ZeroPointA;
+                }
+
+                //
+                // Scale the row sums by the per-matrix zero point offset of matrix B.
+                //
+
+                if (PackedZeroPointB == nullptr) {
                     MlasGemmU8X8ScaleSumBuffer(RowSumBuffer, CountM, -ZeroPointB);
                 }
 
@@ -609,17 +638,17 @@ Return Value:
                         ldc,
                         RowSums,
                         ColumnSumBuffer,
-                        PerColumnZeroPoints ? ZeroPointBBuffer : nullptr,
+                        (PackedZeroPointB != nullptr) ? ZeroPointBBuffer : nullptr,
                         ZeroMode);
 
-                    if (PostProcess && WorkBlock->OutputProcessor != nullptr) {
-                        WorkBlock->OutputProcessor->Process(
-                            WorkBlock->C,
-                            WorkBlock->RangeStartM + m + CountM - RowsRemaining,
-                            WorkBlock->RangeStartN + n,
+                    if (PostProcess && Parameters->OutputProcessor != nullptr) {
+                        Parameters->OutputProcessor->Process(
+                            Parameters->C,
+                            RangeStartM + m + CountM - RowsRemaining,
+                            RangeStartN + n,
                             RowsHandled,
                             CountN,
-                            WorkBlock->ldc);
+                            Parameters->ldc);
                     }
 
                     c += ldc * RowsHandled;
@@ -2651,67 +2680,75 @@ Return Value:
 
 --*/
 {
-    MLAS_GEMM_U8X8_WORK_BLOCK WorkBlock;
+    const auto* WorkBlock = (MLAS_GEMM_U8X8_WORK_BLOCK*)Context;
+    const auto* Parameters = WorkBlock->Parameters;
 
-    memcpy(&WorkBlock, Context, sizeof(MLAS_GEMM_U8X8_WORK_BLOCK));
-
-    const int32_t ThreadIdM = ThreadId / WorkBlock.ThreadCountN;
-    const int32_t ThreadIdN = ThreadId % WorkBlock.ThreadCountN;
+    const int32_t ThreadIdM = ThreadId / WorkBlock->ThreadCountN;
+    const int32_t ThreadIdN = ThreadId % WorkBlock->ThreadCountN;
 
     //
     // Partition the operation along the M dimension.
     //
 
-    MlasPartitionWork(ThreadIdM, WorkBlock.ThreadCountM, WorkBlock.M,
-        &WorkBlock.RangeStartM, &WorkBlock.RangeCountM);
+    size_t RangeStartM;
+    size_t RangeCountM;
+
+    const size_t M = Parameters->M;
+
+    MlasPartitionWork(ThreadIdM, WorkBlock->ThreadCountM, M, &RangeStartM, &RangeCountM);
 
     //
     // Partition the operation along the N dimension.
     //
 
-    const size_t BlockedN = (WorkBlock.N + MLAS_QGEMM_STRIDEN_THREAD_ALIGN - 1) /
+    size_t RangeStartN;
+    size_t RangeCountN;
+
+    const size_t N = Parameters->N;
+
+    const size_t BlockedN = (N + MLAS_QGEMM_STRIDEN_THREAD_ALIGN - 1) /
         MLAS_QGEMM_STRIDEN_THREAD_ALIGN;
 
-    MlasPartitionWork(ThreadIdN, WorkBlock.ThreadCountN, BlockedN,
-        &WorkBlock.RangeStartN, &WorkBlock.RangeCountN);
+    MlasPartitionWork(ThreadIdN, WorkBlock->ThreadCountN, BlockedN,
+        &RangeStartN, &RangeCountN);
 
-    WorkBlock.RangeStartN *= MLAS_QGEMM_STRIDEN_THREAD_ALIGN;
-    WorkBlock.RangeCountN *= MLAS_QGEMM_STRIDEN_THREAD_ALIGN;
+    RangeStartN *= MLAS_QGEMM_STRIDEN_THREAD_ALIGN;
+    RangeCountN *= MLAS_QGEMM_STRIDEN_THREAD_ALIGN;
 
-    WorkBlock.RangeCountN = std::min(WorkBlock.N - WorkBlock.RangeStartN,
-        WorkBlock.RangeCountN);
+    RangeCountN = std::min(N - RangeStartN, RangeCountN);
 
     //
     // Dispatch the partitioned operation.
     //
 
-    const auto* GemmU8X8Dispatch = MlasGemmU8X8GetDispatch(WorkBlock.BIsSigned);
+    const auto* GemmU8X8Dispatch = MlasGemmU8X8GetDispatch(Parameters->BIsSigned);
     MLAS_GEMM_U8X8_OPERATION* GemmU8X8Operation;
 
-    if (WorkBlock.BIsPacked) {
+    if (Parameters->BIsPacked) {
         GemmU8X8Operation = GemmU8X8Dispatch->PackedOperation;
     } else {
         GemmU8X8Operation = GemmU8X8Dispatch->Operation;
     }
 
-    GemmU8X8Operation(&WorkBlock);
+    GemmU8X8Operation(Parameters, RangeStartM, RangeCountM, RangeStartN, RangeCountN);
 }
 
 void
-MlasGemmU8X8Schedule(
-    MLAS_GEMM_U8X8_WORK_BLOCK* WorkBlock,
+MLASCALL
+MlasGemm(
+    const MLAS_GEMM_U8X8_PARAMETERS* Parameters,
     MLAS_THREADPOOL* ThreadPool
     )
 /*++
 
 Routine Description:
 
-    This routine schedules the quantized integer matrix/matrix multiply
-    operation (QGEMM) across one or more threads.
+    This routine implements the quantized integer matrix/matrix multiply
+    operation (QGEMM).
 
 Arguments:
 
-    WorkBlock - Supplies the structure containing the GEMM parameters.
+    Parameters - Supplies the structure containing the GEMM parameters.
 
     ThreadPool - Supplies the thread pool object to use, else nullptr if the
         base library threading support should be used.
@@ -2722,9 +2759,9 @@ Return Value:
 
 --*/
 {
-    const size_t M = WorkBlock->M;
-    const size_t N = WorkBlock->N;
-    const size_t K = WorkBlock->K;
+    const size_t M = Parameters->M;
+    const size_t N = Parameters->N;
+    const size_t K = Parameters->K;
 
     //
     // Compute the number of target threads given the complexity of the SGEMM
@@ -2754,6 +2791,10 @@ Return Value:
     // works okay for operations involving skinny matrices.
     //
 
+    MLAS_GEMM_U8X8_WORK_BLOCK WorkBlock;
+
+    WorkBlock.Parameters = Parameters;
+
     if (N > M) {
 
         const size_t BlockedN = (N + MLAS_QGEMM_STRIDEN_THREAD_ALIGN - 1) /
@@ -2763,8 +2804,8 @@ Return Value:
             TargetThreadCount = int32_t(BlockedN);
         }
 
-        WorkBlock->ThreadCountM = 1;
-        WorkBlock->ThreadCountN = TargetThreadCount;
+        WorkBlock.ThreadCountM = 1;
+        WorkBlock.ThreadCountN = TargetThreadCount;
 
     } else {
 
@@ -2772,208 +2813,11 @@ Return Value:
             TargetThreadCount = int32_t(M);
         }
 
-        WorkBlock->ThreadCountM = TargetThreadCount;
-        WorkBlock->ThreadCountN = 1;
+        WorkBlock.ThreadCountM = TargetThreadCount;
+        WorkBlock.ThreadCountN = 1;
     }
 
-    MlasExecuteThreaded(MlasGemmU8X8Threaded, WorkBlock, TargetThreadCount, ThreadPool);
-}
-
-uint8_t __zpb[4096];
-
-void
-MLASCALL
-MlasGemm(
-    size_t M,
-    size_t N,
-    size_t K,
-    const uint8_t* A,
-    size_t lda,
-    uint8_t ZeroPointA,
-    const uint8_t* B,
-    size_t ldb,
-    uint8_t ZeroPointB,
-    bool BIsSigned,
-    int32_t* C,
-    size_t ldc,
-    MLAS_THREADPOOL* ThreadPool,
-    const MLAS_QGEMM_OUTPUT_PROCESSOR* OutputProcessor
-    )
-/*++
-
-Routine Description:
-
-    This routine implements the quantized integer matrix/matrix multiply
-    operation (QGEMM).
-
-Arguments:
-
-    M - Supplies the number of rows of matrix A and matrix C.
-
-    N - Supplies the number of columns of matrix B and matrix C.
-
-    K - Supplies the number of columns of matrix A and the number of rows of
-        matrix B.
-
-    A - Supplies the address of matrix A.
-
-    lda - Supplies the first dimension of matrix A.
-
-    ZeroPointA - Supplies the zero point offset of matrix A.
-
-    B - Supplies the address of matrix B.
-
-    ldb - Supplies the first dimension of matrix B.
-
-    ZeroPointB - Supplies the zero point offset of matrix B.
-
-    BIsSigned - Supplies true if matrix B is signed data, else false if matrix
-        B is unsigned data.
-
-    C - Supplies the address of matrix C.
-
-    ldc - Supplies the first dimension of matrix C.
-
-    ThreadPool - Supplies the thread pool object to use, else nullptr if the
-        base library threading support should be used.
-
-    OutputProcessor - Post Processor on C.
-
-Return Value:
-
-    None.
-
---*/
-{
-    MLAS_GEMM_U8X8_WORK_BLOCK WorkBlock;
-
-    //
-    // Capture the GEMM parameters to the work block.
-    //
-
-    memset(&WorkBlock, 0, sizeof(MLAS_GEMM_U8X8_WORK_BLOCK));
-
-    WorkBlock.M = M;
-    WorkBlock.N = N;
-    WorkBlock.K = K;
-    WorkBlock.A = A;
-    WorkBlock.lda = lda;
-    WorkBlock.B = B;
-    WorkBlock.ldb = ldb;
-    WorkBlock.ZeroPointB = &ZeroPointB;
-    WorkBlock.C = C;
-    WorkBlock.ldc = ldc;
-    WorkBlock.OutputProcessor = OutputProcessor;
-    WorkBlock.ZeroPointA = ZeroPointA;
-    WorkBlock.BIsSigned = BIsSigned;
-
-#ifdef PER_COLUMN
-    std::fill_n(__zpb, 4096, ZeroPointB);
-    WorkBlock.ZeroPointB = __zpb;
-    WorkBlock.PerColumnZeroPoints = true;
-#endif
-
-    //
-    // Schedule the operation across a set of worker threads.
-    //
-
-    MlasGemmU8X8Schedule(&WorkBlock, ThreadPool);
-}
-
-void
-MLASCALL
-MlasGemm(
-    size_t M,
-    size_t N,
-    size_t K,
-    const uint8_t* A,
-    size_t lda,
-    uint8_t ZeroPointA,
-    const void* PackedB,
-    uint8_t ZeroPointB,
-    bool BIsSigned,
-    int32_t* C,
-    size_t ldc,
-    MLAS_THREADPOOL* ThreadPool,
-    const MLAS_QGEMM_OUTPUT_PROCESSOR* OutputProcessor
-    )
-/*++
-
-Routine Description:
-
-    This routine implements the quantized integer matrix/matrix multiply
-    operation (QGEMM).
-
-Arguments:
-
-    M - Supplies the number of rows of matrix A and matrix C.
-
-    N - Supplies the number of columns of matrix B and matrix C.
-
-    K - Supplies the number of columns of matrix A and the number of rows of
-        matrix B.
-
-    A - Supplies the address of matrix A.
-
-    lda - Supplies the first dimension of matrix A.
-
-    ZeroPointA - Supplies the zero point offset of matrix A.
-
-    PackedB - Supplies the address of packed matrix B.
-
-    ZeroPointB - Supplies the zero point offset of matrix B.
-
-    BIsSigned - Supplies true if matrix B is signed data, else false if matrix
-        B is unsigned data.
-
-    C - Supplies the address of matrix C.
-
-    ldc - Supplies the first dimension of matrix C.
-
-    ThreadPool - Supplies the thread pool object to use, else nullptr if the
-        base library threading support should be used.
-
-    OutputProcessor - Post Processor on C
-
-Return Value:
-
-    None.
-
---*/
-{
-    MLAS_GEMM_U8X8_WORK_BLOCK WorkBlock;
-
-    //
-    // Capture the GEMM parameters to the work block.
-    //
-
-    memset(&WorkBlock, 0, sizeof(MLAS_GEMM_U8X8_WORK_BLOCK));
-
-    WorkBlock.M = M;
-    WorkBlock.N = N;
-    WorkBlock.K = K;
-    WorkBlock.A = A;
-    WorkBlock.lda = lda;
-    WorkBlock.B = PackedB;
-    WorkBlock.ZeroPointB = &ZeroPointB;
-    WorkBlock.C = (int32_t*)C;
-    WorkBlock.ldc = ldc;
-    WorkBlock.OutputProcessor = OutputProcessor;
-    WorkBlock.ZeroPointA = ZeroPointA;
-    WorkBlock.BIsPacked = true;
-    WorkBlock.BIsSigned = BIsSigned;
-
-#ifdef PER_COLUMN
-    std::fill_n(__zpb, 4096, ZeroPointB);
-    WorkBlock.ZeroPointB = __zpb;
-    WorkBlock.PerColumnZeroPoints = true;
-#endif
-
-    //
-    // Schedule the operation across a set of worker threads.
-    //
-
-    MlasGemmU8X8Schedule(&WorkBlock, ThreadPool);
+    MlasExecuteThreaded(MlasGemmU8X8Threaded, &WorkBlock, TargetThreadCount, ThreadPool);
 }
 
 size_t

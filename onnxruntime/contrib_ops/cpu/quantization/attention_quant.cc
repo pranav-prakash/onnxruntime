@@ -212,40 +212,29 @@ Status QAttention<T>::Compute(OpKernelContext* context) const {
                                                                     head_size,
                                                                     &dequant_scale,
                                                                     bias_data + weights_offset);
+
+        MLAS_GEMM_U8X8_PARAMETERS gemm_params;
+        gemm_params.M = sequence_length;
+        gemm_params.N = head_size;
+        gemm_params.K = input_hidden_size;
+        gemm_params.A = input_data + input_offset;
+        gemm_params.lda = input_hidden_size;
+        gemm_params.ZeroPointA = input_zero_point;
         if (packed_weights_) {
           const auto* packed_weight =
               static_cast<const uint8_t*>(packed_weights_.get()) + packed_weights_size_ * (weights_offset / head_size);
-          MlasGemm(
-              sequence_length,                                    // M      = S
-              head_size,                                          // N      = H
-              input_hidden_size,                                  // K      = D
-              input_data + input_offset,                          // A
-              input_hidden_size,                                  // lda    = D
-              input_zero_point,                                   // input zero point
-              packed_weight,                                      // B
-              weight_zero_point,                                  // weight zero point
-              weights_is_signed,                                  // weight data type
-              reinterpret_cast<int32_t*>(qkv_dest + qkv_offset),  // C
-              head_size,                                          // ldc
-              nullptr,                                            // use single-thread
-              &scale_bias_processor);                             // output processor
+          gemm_params.B = packed_weight;
+          gemm_params.BIsPacked = true;
         } else {
-          MlasGemm(
-              sequence_length,                                    // M      = S
-              head_size,                                          // N      = H
-              input_hidden_size,                                  // K      = D
-              input_data + input_offset,                          // A
-              input_hidden_size,                                  // lda    = D
-              input_zero_point,                                   // input zero point
-              weights_data + weights_offset,                      // B
-              3 * hidden_size,                                    // ldb    = 3NH
-              weight_zero_point,                                  // weight zero point
-              weights_is_signed,                                  // weight data type
-              reinterpret_cast<int32_t*>(qkv_dest + qkv_offset),  // C
-              head_size,                                          // ldc
-              nullptr,                                            // use single-thread
-              &scale_bias_processor);                             // post processor
+          gemm_params.B = weights_data + weights_offset;
+          gemm_params.ldb = 3 * hidden_size;
         }
+        gemm_params.ZeroPointB = &weight_zero_point;
+        gemm_params.BIsSigned = weights_is_signed;
+        gemm_params.C = reinterpret_cast<int32_t*>(qkv_dest + qkv_offset);
+        gemm_params.ldc = head_size;
+        gemm_params.OutputProcessor = &scale_bias_processor;
+        MlasGemm(&gemm_params, nullptr);
       }
     });
   }
