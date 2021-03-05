@@ -428,12 +428,13 @@ Return Value:
                         ZeroMode);
 
                     if (PostProcess && Parameters->OutputProcessor != nullptr) {
-                        Parameters->OutputProcessor->Process(Parameters->C,
-                                                            RangeStartM + m + CountM - RowsRemaining,
-                                                            RangeStartN + n,
-                                                            RowsHandled,
-                                                            CountN,
-                                                            Parameters->ldc);
+                        Parameters->OutputProcessor->Process(
+                            Parameters->C,
+                            RangeStartM + m + CountM - RowsRemaining,
+                            RangeStartN + n,
+                            RowsHandled,
+                            CountN,
+                            Parameters->ldc);
                     }
 
                     c += ldc * RowsHandled;
