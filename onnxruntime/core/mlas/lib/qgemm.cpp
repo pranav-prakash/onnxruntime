@@ -253,7 +253,7 @@ Arguments:
 
     RangeStartN - Supplies the starting column index to output.
 
-    RangeCountM - Supplies the number of columns to output.
+    RangeCountN - Supplies the number of columns to output.
 
 Return Value:
 
@@ -476,7 +476,7 @@ Arguments:
 
     RangeStartN - Supplies the starting column index to output.
 
-    RangeCountM - Supplies the number of columns to output.
+    RangeCountN - Supplies the number of columns to output.
 
 Return Value:
 
