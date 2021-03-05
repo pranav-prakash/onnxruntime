@@ -469,7 +469,7 @@ static Status SaveModelWithExternalInitializers(Model& model, const T& file_path
 }
 
 #ifdef _WIN32
-Status Model::Save(Model& model, const std::wstring& file_path, const std::wstring& external_file_name) {
+Status Model::Save(Model& model, const std::wstring& file_path, const std::string& external_file_name) {
   return SaveModel(model, file_path, external_file_name);
 }
 #endif
@@ -491,7 +491,7 @@ Status Model::Save(Model& model, const std::string& file_path) {
   return SaveModel(model, file_path);
 }
 
-Status Model::SaveWithExternalInitializers(Model& model, const std::string& file_path, const std::string& external_file_name) {
+Status Model::SaveWithExternalInitializers(Model& model, const PathString& file_path, const std::string& external_file_name) {
   return SaveModelWithExternalInitializers(model, file_path, external_file_name);
 }
 
