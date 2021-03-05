@@ -18,13 +18,13 @@ namespace test {
 
 void LoadSaveAndCompareModel(const std::string& input_onnx, const std::string& output_onnx, const std::string& external_init_file) {
   std::shared_ptr<Model> model;
-  ASSERT_STATUS_OK(Model::Load(input_onnx.c_str(), model, nullptr, DefaultLoggingManager().DefaultLogger()));
+  ASSERT_STATUS_OK(Model::Load(ToPathString(input_onnx), model, nullptr, DefaultLoggingManager().DefaultLogger()));
   std::remove(output_onnx.c_str());
   std::remove(external_init_file.c_str());
   ASSERT_STATUS_OK(Model::SaveWithExternalInitializers(*model, ToPathString(output_onnx), external_init_file));
 
   std::shared_ptr<Model> model_from_external;
-  ASSERT_STATUS_OK(Model::Load(output_onnx, model_from_external, nullptr, DefaultLoggingManager().DefaultLogger()));
+  ASSERT_STATUS_OK(Model::Load(ToPathString(output_onnx), model_from_external, nullptr, DefaultLoggingManager().DefaultLogger()));
 
   Graph& graph = model->MainGraph();
   // Perform shape inference on the graph, if this succeeds then it means that we could correctly read the 
