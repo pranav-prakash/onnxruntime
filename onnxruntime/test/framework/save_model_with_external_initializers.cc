@@ -64,7 +64,7 @@ TEST(SaveWithExternalInitializers, Mnist) {
 }
 
 TEST(SaveWithExternalInitializers, BertSaveAndCompare) {
-  LoadSaveAndCompareModel("testdata/bert_toy_postprocessed.onnx", "testdata/bert_toy_with_external_initializers.onnx", "bert_toy_external_initializers.bin");
+  LoadSaveAndCompareModel("testdata/bart_tiny.onnx", "testdata/bart_tiny_with_external_initializers.onnx", "bart_tiny_external_initializers.bin");
 }
 
 }  // namespace test
