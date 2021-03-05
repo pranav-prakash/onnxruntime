@@ -2113,6 +2113,15 @@ static constexpr OrtApi ort_api_1_to_8 = {
     // Version 8 - In development, feel free to add/remove/rearrange here
 };
 
+static constexpr OrtExperimentalApi ort_experimental_apis = {
+    &OrtExperimentalApis::CreatePipelineSession,
+    &OrtExperimentalApis::Run,
+    &OrtExperimentalApis::CreateOrtRequestBatch,
+    &OrtExperimentalApis::AddRequestToBatch,
+    &OrtExperimentalApis::CreateOrtResponseBatch,
+    &OrtExperimentalApis::AddResponseToBatch,
+};
+
 // Assert to do a limited check to ensure Version 1 of OrtApi never changes (will detect an addition or deletion but not if they cancel out each other)
 // If this assert hits, read the above 'Rules on how to add a new Ort API version'
 static_assert(offsetof(OrtApi, ReleaseCustomOpDomain) / sizeof(void*) == 101, "Size of version 1 API cannot change");
@@ -2125,6 +2134,10 @@ ORT_API(const OrtApi*, OrtApis::GetApi, uint32_t version) {
           version, ORT_API_VERSION);
 
   return nullptr;  // Unsupported version
+}
+
+ORT_API(const OrtExperimentalApi*, OrtApis::GetExperimentalApi) {
+  return &ort_experimental_apis;
 }
 
 ORT_API(const char*, OrtApis::GetVersionString) {

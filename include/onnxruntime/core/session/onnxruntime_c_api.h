@@ -7,7 +7,7 @@
 #include <string.h>
 
 // This value is used in structures passed to ORT so that a newer version of ORT will still work with them
-#define ORT_API_VERSION 8
+#define ORT_API_VERSION 7
 
 #ifdef __cplusplus
 extern "C" {
@@ -300,9 +300,14 @@ typedef struct OrtOpenVINOProviderOptions {
 struct OrtApi;
 typedef struct OrtApi OrtApi;
 
+struct OrtExperimentalApi;
+typedef struct OrtExperimentalApi OrtExperimentalApi;
+
 struct OrtApiBase {
   const OrtApi*(ORT_API_CALL* GetApi)(uint32_t version)NO_EXCEPTION;  // Pass in ORT_API_VERSION
   // nullptr will be returned if the version is unsupported, for example when using a runtime older than this header file
+
+  const OrtExperimentalApi*(ORT_API_CALL* GetExperimentalApi)() NO_EXCEPTION;
 
   const char*(ORT_API_CALL* GetVersionString)() NO_EXCEPTION;
 };
@@ -1230,6 +1235,17 @@ struct OrtCustomOp {
   OrtCustomOpInputOutputCharacteristic(ORT_API_CALL* GetInputCharacteristic)(_In_ const struct OrtCustomOp* op, _In_ size_t index);
   OrtCustomOpInputOutputCharacteristic(ORT_API_CALL* GetOutputCharacteristic)(_In_ const struct OrtCustomOp* op, _In_ size_t index);
 };
+
+// struct OrtExperimentalApi {
+//   ORT_API2_STATUS(CreatePipelineSession, _In_ const OrtEnv* env, _In_ const ORTCHAR_T* ensemble_path);
+//   ORT_API2_STATUS(Run, _In_ const OrtReqBatch* req_batch, _Out_ OrtRespBatch* resp_batch, int num_steps);
+//   ORT_API2_STATUS(CreateOrtRequestBatch, _Outptr_ OrtReqBatch** req_batch);
+//   ORT_API2_STATUS(AddRequestToBatch, _In_reads_(input_len) const char* const* input_names,
+//                   _In_reads_(input_len) const OrtValue* const* input, size_t input_len);
+//   ORT_API2_STATUS(CreateOrtResponseBatch, _Outptr_ OrtRespBatch** resp_batch);
+//   ORT_API2_STATUS(AddResponseToBatch, _In_reads_(output_names_len) const char* const* output_names1,
+//                   size_t output_names_len, _In_reads_(output_names_len) OrtValue** output););
+// };
 
 #ifdef __cplusplus
 }
