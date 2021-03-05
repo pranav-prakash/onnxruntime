@@ -468,12 +468,6 @@ static Status SaveModelWithExternalInitializers(Model& model, const T& file_path
   return Env::Default().FileClose(fd);
 }
 
-#ifdef _WIN32
-Status Model::Save(Model& model, const std::wstring& file_path, const std::string& external_file_name) {
-  return SaveModel(model, file_path, external_file_name);
-}
-#endif
-
 Status Model::Load(const PathString& file_path,
                    ONNX_NAMESPACE::ModelProto& model_proto) {
   return LoadModel(file_path, model_proto);
