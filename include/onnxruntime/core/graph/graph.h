@@ -941,6 +941,8 @@ class Graph {
   const ONNX_NAMESPACE::GraphProto& ToGraphProto();
   ONNX_NAMESPACE::GraphProto ToGraphProto() const;
 
+  ONNX_NAMESPACE::GraphProto ToGraphProtoWithExternalInitializers(const std::string& external_file_name) const;
+
   /** Gets the ISchemaRegistry instances being used with this Graph. */
   IOnnxRuntimeOpSchemaCollectionPtr GetSchemaRegistry() const;
 

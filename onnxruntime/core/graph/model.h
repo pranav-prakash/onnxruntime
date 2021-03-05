@@ -165,12 +165,25 @@ class Model {
   // Get model's serialization proto data.
   ONNX_NAMESPACE::ModelProto ToProto();
 
+  ONNX_NAMESPACE::ModelProto ToGraphProtoWithExternalInitializers(const std::string& external_file_name);
+
 #ifdef _WIN32
   static common::Status Save(Model& model, const std::wstring& file_path);
 #endif
   static common::Status Save(Model& model, const std::string& file_path);
 
   static common::Status Save(Model& model, int fd);
+
+  // Save the model to file using an external file for initializers.
+  // Notice that when on Windows the external_file_name is a plain string. This is because the string needs to be
+  // saved inside the output protobuf as a plain string, so wchars are not supported.
+#ifdef _WIN32
+  static common::Status SaveWithExternalInitializers(Model& model, const std::wstring& file_path, const std::string& external_file_name);
+#else
+  static common::Status SaveWithExternalInitializers(Model& model, const std::string& file_path, const std::string& external_file_name);
+#endif
+
+  static common::Status SaveWithExternalInitializers(Model& model, int fd, const std::string& external_file_name);
 
   static common::Status Load(std::istream& model_istream, ONNX_NAMESPACE::ModelProto* p_model_proto);
 

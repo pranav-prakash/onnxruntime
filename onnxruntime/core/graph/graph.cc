@@ -3030,6 +3030,96 @@ ONNX_NAMESPACE::GraphProto Graph::ToGraphProto() const {
   return result;
 }
 
+ONNX_NAMESPACE::GraphProto Graph::ToGraphProtoWithExternalInitializers(const std::string& external_file_name) const {
+  // Sparse tensors are not supported yet.
+  ORT_ENFORCE(sparse_tensor_names_.empty());
+
+  GraphProto graph_proto;
+  graph_proto.set_name(Name());
+  graph_proto.set_doc_string(Description());
+
+  std::ofstream output_stream(external_file_name, std::ofstream::out | std::ofstream::binary);
+  if (!output_stream.is_open())
+    throw std::runtime_error("Cannot open file " + external_file_name);
+
+  // Add all initializers to the graph proto dumping their content to the external file.
+  int64_t file_offset = 0;
+  for (const auto& i : GetAllInitializedTensors()) {
+    TensorProto* output_proto = graph_proto.add_initializer();
+    const TensorProto* input_proto = i.second;
+
+    size_t tensor_bytes_size = 0;
+    std::unique_ptr<uint8_t[]> raw_data;
+    ORT_THROW_IF_ERROR(utils::UnpackInitializerData(*input_proto, Path(), raw_data, tensor_bytes_size));
+
+    // Only place floating-point tensors in the external buffer.
+    // This makes sure that shape-constants used by Reshape and Transpose are included in the onnx file.
+    // Without these the onnx shape and type inference pass does not work.
+    if (input_proto->data_type() != ONNX_NAMESPACE::TensorProto_DataType_FLOAT &&
+        input_proto->data_type() != ONNX_NAMESPACE::TensorProto_DataType_DOUBLE &&
+        input_proto->data_type() != ONNX_NAMESPACE::TensorProto_DataType_FLOAT16 &&
+        input_proto->data_type() != ONNX_NAMESPACE::TensorProto_DataType_BFLOAT16) {
+      *output_proto = *input_proto;
+      continue;
+    }
+
+    for (size_t i = 0; i != tensor_bytes_size; ++i) {
+      output_stream << raw_data[i];
+    }
+
+    output_proto->set_data_location(ONNX_NAMESPACE::TensorProto_DataLocation::TensorProto_DataLocation_EXTERNAL);
+    ONNX_NAMESPACE::StringStringEntryProto* location = output_proto->add_external_data();
+    location->set_key("location");
+    location->set_value(external_file_name);
+    ONNX_NAMESPACE::StringStringEntryProto* offset = output_proto->add_external_data();
+    offset->set_key("offset");
+    offset->set_value(std::to_string(file_offset));
+    ONNX_NAMESPACE::StringStringEntryProto* length = output_proto->add_external_data();
+    length->set_key("length");
+    length->set_value(std::to_string(tensor_bytes_size));
+
+    output_proto->set_name(input_proto->name());
+    output_proto->set_data_type(input_proto->data_type());
+    for (int i = 0; i != input_proto->dims_size(); ++i) {
+      output_proto->add_dims(input_proto->dims(i));
+    }
+    output_proto->set_doc_string(input_proto->doc_string());
+
+    file_offset += tensor_bytes_size;
+  }
+
+  for (const auto* input_arg : GetInputsIncludingInitializers()) {
+    *(graph_proto.mutable_input()->Add()) = input_arg->ToProto();
+  }
+
+  for (const auto* output_arg : GetOutputs()) {
+    *(graph_proto.mutable_output()->Add()) = output_arg->ToProto();
+  }
+
+  for (const auto* value_info : value_info_) {
+    *(graph_proto.mutable_value_info()->Add()) = value_info->ToProto();
+  }
+
+  // add the NodeArg info for outer scope NodeArgs so we capture the type information
+  for (const auto& name : outer_scope_node_arg_names_) {
+    auto* node_arg = GetNodeArg(name);
+    ORT_ENFORCE(node_arg, "Outer scope node arg name '" + name + "'was added but does not exist. ");
+    *(graph_proto.mutable_value_info()->Add()) = node_arg->ToProto();
+  }
+
+  GraphViewer graph_viewer(*this);
+  // Nodes must be sorted in Topological Order in the GraphProto per ONNX spec.
+  for (auto& node_idx : graph_viewer.GetNodesInTopologicalOrder()) {
+    const gsl::not_null<NodeProto*> node_proto{graph_proto.add_node()};
+    const gsl::not_null<const Node*> p_node{GetNode(node_idx)};
+    // we need to update any GraphProto attributes for subgraphs so that any changes made by things
+    // such as the optimizers are captured. otherwise we can end up saving an invalid graph.
+    p_node->ToProto(*node_proto, /* update_subgraphs */ true);
+  }
+
+  return graph_proto;
+}
+
 void Graph::ToGraphProtoInternal(ONNX_NAMESPACE::GraphProto& graph_proto) const {
   graph_proto_->clear_node();
   graph_proto_->clear_input();
