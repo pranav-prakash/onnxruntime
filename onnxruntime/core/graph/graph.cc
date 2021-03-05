@@ -3044,9 +3044,9 @@ ONNX_NAMESPACE::GraphProto Graph::ToGraphProtoWithExternalInitializers(const std
 
   // Add all initializers to the graph proto dumping their content to the external file.
   int64_t file_offset = 0;
-  for (const auto& i : GetAllInitializedTensors()) {
+  for (const auto& iter : GetAllInitializedTensors()) {
     TensorProto* output_proto = graph_proto.add_initializer();
-    const TensorProto* input_proto = i.second;
+    const TensorProto* input_proto = iter.second;
 
     size_t tensor_bytes_size = 0;
     std::unique_ptr<uint8_t[]> raw_data;
@@ -3063,8 +3063,8 @@ ONNX_NAMESPACE::GraphProto Graph::ToGraphProtoWithExternalInitializers(const std
       continue;
     }
 
-    for (size_t i = 0; i != tensor_bytes_size; ++i) {
-      output_stream << raw_data[i];
+    for (size_t index = 0; index != tensor_bytes_size; ++index) {
+      output_stream << raw_data[index];
     }
 
     output_proto->set_data_location(ONNX_NAMESPACE::TensorProto_DataLocation::TensorProto_DataLocation_EXTERNAL);
