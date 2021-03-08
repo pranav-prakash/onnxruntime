@@ -337,11 +337,12 @@ class TrainingSession : public InferenceSession {
   */
   common::Status Save(const PathString& model_uri, SaveOption opt);
 
-  /** Save the model using an external file for initializers.
-   * This function is useful to avoid hitting the 2GB file size limit for protobufs when using large models.
+  /** Save the model using an external file for floating-point initializers.
+  This function is useful to avoid hitting the size limit for protobufs when using large models.
+  This is particularly useful for graphs after auto-diff.
   @param model_uri the path for the new model.
   @param external_file_uri the name for the external initializers file. This is a plain string because
-  it needs to be embedded into the onnx protobuf. 
+  it needs to be saved into the onnx protobuf, where wchar is not supported.
   */
   common::Status SaveWithExternalInitializers(const PathString& model_uri, const std::string& external_file_name);
 

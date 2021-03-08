@@ -941,6 +941,11 @@ class Graph {
   const ONNX_NAMESPACE::GraphProto& ToGraphProto();
   ONNX_NAMESPACE::GraphProto ToGraphProto() const;
 
+  /** Gets the GraphProto representation of this Graph placing floating-point initializer in a external file.
+  This function is useful to avoid hitting the size limit for protobuf files.
+  @param external_file_name name of the auxiliary binary file where floating-point initializers are placed.
+  @returns GraphProto serialization of the graph.
+  */
   ONNX_NAMESPACE::GraphProto ToGraphProtoWithExternalInitializers(const std::string& external_file_name) const;
 
   /** Gets the ISchemaRegistry instances being used with this Graph. */

@@ -165,6 +165,9 @@ class Model {
   // Get model's serialization proto data.
   ONNX_NAMESPACE::ModelProto ToProto();
 
+  // Get model's serialization proto data.
+  // Floating-point initializers are saved in the given external file.
+  // This function is useful to avoid hitting the size limit for protobuf files.
   ONNX_NAMESPACE::ModelProto ToGraphProtoWithExternalInitializers(const std::string& external_file_name);
 
 #ifdef _WIN32
@@ -174,13 +177,17 @@ class Model {
 
   static common::Status Save(Model& model, int fd);
 
-  // Save the model to file using an external file for initializers.
-  // Notice that when on Windows the external_file_name is a plain string. This is because the string needs to be
-  // saved inside the output protobuf as a plain string, so wchars are not supported.
+  // Save the model to file using an external file for floating-point initializers.
+  // Notice that when on Windows the external_file_name is a plain string.
+  // This is because the string is saved inside the output protobuf as a plain string, where wchar is not supported.
 #ifdef _WIN32
-  static common::Status SaveWithExternalInitializers(Model& model, const std::wstring& file_path, const std::string& external_file_name);
+  static common::Status SaveWithExternalInitializers(Model& model,
+                                                     const std::wstring& file_path,
+                                                     const std::string& external_file_name);
 #else
-  static common::Status SaveWithExternalInitializers(Model& model, const std::string& file_path, const std::string& external_file_name);
+  static common::Status SaveWithExternalInitializers(Model& model,
+                                                     const std::string& file_path,
+                                                     const std::string& external_file_name);
 #endif
 
   static common::Status SaveWithExternalInitializers(Model& model, int fd, const std::string& external_file_name);
